@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,6 +23,7 @@
     <div class="nav-center">
       <a href="#network">Network</a>
       <a href="#matching">Interests</a>
+      <a href="#communities">Communities</a>
       <a href="#discover">Discover</a>
     </div>
 
@@ -31,8 +31,56 @@
       <button class="nav-chat" onclick="openChat()" aria-label="Open chats">
         ✉ <span>Chats</span> <span class="chat-count" id="chatCount">0</span>
       </button>
-      <button class="nav-btn" id="joinButton" onclick="openModal('signup')">Join ↗</button>
-      <button class="nav-btn" id="logoutButton" onclick="logoutUser()" hidden>Logout</button>
+
+      <button class="nav-btn" id="joinButton" onclick="openModal('signup')">
+        Join ↗
+      </button>
+
+      <div class="user-menu" id="userMenu" hidden>
+        <button
+          class="nav-avatar-btn"
+          id="navAvatarBtn"
+          type="button"
+          onclick="toggleUserMenu(event)"
+          title="Account menu"
+          aria-label="Account menu"
+        >
+          <div class="nav-avatar" id="navAvatar">👤</div>
+        </button>
+
+        <button
+          class="menu-dots-btn"
+          id="userMenuTrigger"
+          type="button"
+          aria-expanded="false"
+          aria-label="Account options"
+          title="Account menu"
+          onclick="toggleUserMenu(event)"
+        >
+          ⋮
+        </button>
+
+        <div class="user-menu-dropdown" id="userMenuDropdown" hidden>
+          <div class="dropdown-user-header">
+            <div class="dropdown-avatar" id="dropdownAvatar">👤</div>
+            <div class="dropdown-user-details">
+              <strong id="dropdownUserName">Member</strong>
+              <small id="dropdownUserRole">Community member</small>
+            </div>
+          </div>
+          <div class="dropdown-divider"></div>
+          <button type="button" class="dropdown-action" onclick="openModal('signup'); closeUserMenu();">
+            ✎ <span>Edit profile</span>
+          </button>
+          <button type="button" class="dropdown-action" onclick="openChat(); closeUserMenu();">
+            ✉ <span>Messages</span>
+          </button>
+          <div class="dropdown-divider"></div>
+          <button type="button" class="dropdown-action menu-logout" onclick="logoutUser()">
+            ↪ <span>Logout</span>
+          </button>
+        </div>
+      </div>
     </div>
   </nav>
 
@@ -44,12 +92,15 @@
       <div class="floating f4">🎮 GAMING</div>
 
       <div class="hero-content">
-        <div class="badge"><span class="live"></span> Your next connection starts here</div>
+        <div class="badge">
+          <span class="live"></span>
+          Your next connection starts here
+        </div>
 
-        <h1>
-          <span class="hero-line1">FIND</span>
-          <span class="hero-line2">YOUR</span>
-          <span class="hero-line3">PEOPLE.</span>
+        <h1 class="hero-wordmark" aria-label="Find your people">
+          <span class="hero-line1" data-word="FIND">FIND</span>
+          <span class="hero-line2" data-word="YOUR">YOUR</span>
+          <span class="hero-line3" data-word="PEOPLE.">PEOPLE<span class="hero-dot">.</span></span>
         </h1>
 
         <p class="hero-description">
@@ -57,9 +108,46 @@
           Find your community, exchange ideas and build something together.
         </p>
 
-        <div class="hero-buttons">
-          <button class="primary" onclick="openModal('signup')">✦ Create your profile</button>
-          <button class="secondary" onclick="scrollToDiscover()">Explore the community ↓</button>
+        <div class="hero-buttons" id="heroButtons">
+          <button class="primary" id="heroJoinButton" onclick="openModal('signup')">
+            ✦ Create your profile
+          </button>
+
+          <button class="secondary" onclick="scrollToDiscover()">
+            Explore the community ↓
+          </button>
+        </div>
+
+        <div class="hero-welcome-card" id="heroWelcome" hidden>
+          <div class="welcome-card-header">
+            <div class="welcome-avatar-wrapper">
+              <div class="welcome-large-avatar" id="welcomeBigAvatar">👤</div>
+              <span class="welcome-live-dot" title="Active now"></span>
+            </div>
+            <div class="welcome-headline-box">
+              <div class="welcome-eyebrow-tag">
+                <span class="sparkle-icon">✦</span> Logged In as Member
+              </div>
+              <h2 class="welcome-big-heading">
+                Welcome, <span class="welcome-name-gradient" id="welcomeUserName">Member</span>! 👋
+              </h2>
+              <p class="welcome-subtext" id="welcomeUserBio">
+                Find collaborators, join circles, and discover people who share your passions.
+              </p>
+            </div>
+          </div>
+
+          <div class="welcome-card-actions">
+            <button class="primary" onclick="scrollToDiscover()">
+              ✦ Explore people matching your interests ↓
+            </button>
+            <button class="secondary" onclick="openChat()">
+              ✉ Open messages
+            </button>
+            <button class="secondary" onclick="openModal('signup')">
+              ✎ Edit profile
+            </button>
+          </div>
         </div>
 
         <div class="hero-proof">
@@ -148,6 +236,28 @@
       </div>
     </section>
 
+    <section class="section" id="communities">
+      <div class="section-eyebrow">YOUR PEOPLE, YOUR CIRCLE</div>
+      <h2 class="section-title">Find your corner<br>of the internet.</h2>
+      <p class="section-description">
+        Every passion has a place. Join the circles that match your interests and meet people who are into the same things.
+      </p>
+
+      <div class="community-toolbar">
+        <div class="community-toolbar-copy">
+          <span class="recommendation-icon">✦</span>
+          <div>
+            <strong>Your interest circles</strong>
+            <span id="communitySummary">Choose your interests and join the communities that fit.</span>
+          </div>
+        </div>
+        <button class="primary community-join-all" id="joinInterestCommunities" type="button" onclick="joinMyInterestCommunities()">Join my interest circles ↗</button>
+      </div>
+
+      <div class="communities-grid" id="communitiesGrid" aria-live="polite"></div>
+      <p class="community-footnote">Preview members help showcase the community experience. Teammate accounts are local demo accounts.</p>
+    </section>
+
     <section class="section" id="discover">
       <div class="section-eyebrow">YOUR NEXT CONNECTION</div>
       <h2 class="section-title">Meet your kind<br>of people.</h2>
@@ -160,7 +270,7 @@
           <span class="recommendation-icon">✦</span>
           <div>
             <strong>Recommended for you</strong>
-            <span id="discoverySummary">Demo community profiles, ranked by shared interests</span>
+            <span id="discoverySummary">Members ranked by shared interests</span>
           </div>
         </div>
         <button class="filter" id="recommendationToggle" type="button" onclick="toggleRecommendedOnly()">
@@ -180,16 +290,16 @@
       <p class="no-results" id="noResults" hidden>No profiles found. Try another search or interest.</p>
 
       <div class="load-more-wrap">
-        <span id="profileCount">105 demo profiles</span>
-        <button class="secondary" id="showMoreButton" onclick="showMoreProfiles()">Load more people ↓</button>
+        <span id="profileCount">Showing up to 8 relevant profiles</span>
+        <button class="secondary" id="showMoreButton" onclick="showMoreProfiles()" hidden>Load more people ↓</button>
       </div>
 
       <p class="demo-note">
-        Demo profiles are for preview only. Real connection requests and chat work with registered members.
+        Curated preview profiles are included for the demo. Connection requests and chat are saved by the local SkillMate backend.
       </p>
     </section>
 
-    <section class="section">
+    <section class="section" id="joinCtaSection">
       <div class="cta">
         <div class="section-eyebrow">YOUR MOVE</div>
         <h2>Find someone<br>who gets it.</h2>
@@ -205,7 +315,6 @@
     <small>SkillMate © 2026</small>
   </footer>
 
-  <!-- SIMPLE LOGIN / SIGNUP -->
   <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="SkillMate account">
     <div class="auth-box">
       <button class="auth-close" onclick="closeModal()" aria-label="Close dialog">×</button>
@@ -325,7 +434,6 @@
     </div>
   </div>
 
-  <!-- CHAT DRAWER -->
   <div class="chat-backdrop" id="chatBackdrop" onclick="closeChat()"></div>
 
   <aside class="chat-drawer" id="chatDrawer" aria-label="Chats" aria-hidden="true">
@@ -339,6 +447,15 @@
 
     <div class="chat-layout">
       <div class="chat-sidebar">
+        <div class="chat-sidebar-user" id="chatSidebarUser" hidden>
+          <div class="sidebar-user-avatar" id="sidebarUserAvatar">👤</div>
+          <div class="sidebar-user-info">
+            <strong id="sidebarUserName">Member</strong>
+            <span class="sidebar-user-status"><i class="status-dot"></i> Online</span>
+          </div>
+          <button class="sidebar-user-action" type="button" onclick="openModal('signup')" title="Edit profile">✎</button>
+        </div>
+
         <div class="chat-search-wrap">
           <span>⌕</span>
           <input id="chatSearch" placeholder="Find a conversation" aria-label="Find conversations">
