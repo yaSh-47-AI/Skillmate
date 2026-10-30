@@ -1,6 +1,4 @@
-
 require("dotenv").config();
-
 const express = require("express");
 const session = require("express-session");
 const bcrypt = require("bcryptjs");
@@ -26,9 +24,6 @@ fs.mkdirSync(uploadDir, { recursive: true });
 
 app.disable("x-powered-by");
 
-// Security headers. CSP is disabled for now because the existing
-// frontend uses inline onclick handlers and inline styles.
-// HSTS is disabled because this local server uses HTTP.
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -38,10 +33,6 @@ app.use(
 );
 
 app.use(express.json({ limit: "1mb" }));
-
-/* ==========================================================
-   PERSISTENT SESSION SECRET
-========================================================== */
 
 function getSessionSecret() {
   const envSecret = process.env.SESSION_SECRET;
@@ -59,7 +50,6 @@ function getSessionSecret() {
       return existing;
     }
   } catch (_) {
-    // Generate a secret on first startup.
   }
 
   const secret = crypto.randomBytes(48).toString("hex");
@@ -69,15 +59,12 @@ function getSessionSecret() {
   return secret;
 }
 
-/* ==========================================================
-   SQLITE SESSION STORE
-========================================================== */
-
 class SQLiteSessionStore extends session.Store {
   constructor(filename) {
     super();
 
     this.database = new Database(filename);
+
     this.database.pragma("journal_mode = WAL");
 
     this.database.exec(`
@@ -149,6 +136,7 @@ class SQLiteSessionStore extends session.Store {
       }
 
       this.setStatement.run(sid, JSON.stringify(sess), expires);
+
       this.cleanupStatement.run(Date.now());
 
       callback?.(null);
@@ -229,12 +217,6 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-/* ==========================================================
-   RATE LIMITS
-   Failed login/register attempts count toward the limits.
-   Successful requests are skipped.
-========================================================== */
-
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -262,11 +244,6 @@ const registerLimiter = rateLimit({
     res.status(options.statusCode).json(options.message);
   }
 });
-
-/* ==========================================================
-   APPLICATION DATABASE
-   Existing skillmate.sqlite is preserved.
-========================================================== */
 
 const db = new Database(path.join(ROOT, "skillmate.sqlite"));
 
@@ -328,12 +305,53 @@ db.exec(`
   ON connections(recipient_id, status);
 `);
 
+const userColumns = db.pragma("table_info(users)");
+
+if (!userColumns.some(column => column.name === "is_demo")) {
+  db.exec("ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0");
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS communities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '✦',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS community_members (
+    community_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (community_id, user_id),
+    FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_community_members_user
+  ON community_members(user_id);
+
+  CREATE INDEX IF NOT EXISTS idx_community_members_community
+  ON community_members(community_id);
+
+  CREATE TABLE IF NOT EXISTS community_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    community_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_community_messages_history
+  ON community_messages(community_id, id);
+`);
+
 console.log("Application database connected.");
 console.log("Persistent session storage connected.");
-
-/* ==========================================================
-   HELPERS
-========================================================== */
 
 function cleanInterests(value) {
   if (!Array.isArray(value)) return [];
@@ -382,7 +400,7 @@ function saveInterests(userId, interests) {
 
 function getProfile(userId) {
   const user = db.prepare(`
-    SELECT id, name, email, bio, photo_url, created_at
+    SELECT id, name, email, bio, photo_url, created_at, is_demo
     FROM users
     WHERE id = ?
   `).get(userId);
@@ -397,8 +415,87 @@ function getProfile(userId) {
     ORDER BY i.name COLLATE NOCASE
   `).all(userId).map(item => item.name);
 
-  return { ...user, interests };
+  const storedBio = String(user.bio || "");
+  const separator = storedBio.lastIndexOf(" · ");
+  const bio = separator >= 0 ? storedBio.slice(0, separator) : storedBio;
+  const city = separator >= 0 ? storedBio.slice(separator + 3) : "";
+
+  return {
+    ...user,
+    bio,
+    city,
+    is_demo: Boolean(user.is_demo),
+    interests
+  };
 }
+
+function getPublicProfile(userId) {
+  const profile = getProfile(userId);
+
+  if (!profile) return null;
+
+  const { email, ...publicProfile } = profile;
+
+  return publicProfile;
+}
+
+const COMMUNITY_CATALOG = [
+  { topic: "AI", name: "Neural Nexus", description: "A space for AI, machine learning, and curious builders.", emoji: "✦" },
+  { topic: "Python", name: "PyVerse", description: "Share Python projects, scripts, learning paths, and clever solutions.", emoji: "🐍" },
+  { topic: "Web Development", name: "Stack Society", description: "Build the web together—from clean UI to full-stack apps.", emoji: "⌘" },
+  { topic: "Startups", name: "Launchpad League", description: "Trade ideas, test concepts, and learn how products get built.", emoji: "🚀" },
+  { topic: "Music", name: "Soundwave Circle", description: "For playlists, instruments, songwriting, and all things sound.", emoji: "♫" },
+  { topic: "Gaming", name: "Pixel Arena", description: "Gaming culture, game design, strategy, and friendly competition.", emoji: "🎮" },
+  { topic: "Design", name: "Pixel Society", description: "A studio-like circle for UI/UX, graphics, product thinking, and visual craft.", emoji: "🎨" },
+  { topic: "Robotics", name: "RoboRealm", description: "Robots, sensors, control systems, and hands-on engineering ideas.", emoji: "🤖" },
+  { topic: "Psychology", name: "Mindscape Collective", description: "Explore human behaviour, habits, learning, and how people think.", emoji: "☼" },
+  { topic: "Photography", name: "FrameCraft", description: "Share compositions, visual stories, editing tips, and photo projects.", emoji: "📷" },
+  { topic: "Finance", name: "FinFront", description: "Discuss finance basics, markets, fintech, and responsible money learning.", emoji: "₹" },
+  { topic: "Movies", name: "Reel Club", description: "Film lovers sharing cinema, genres, storytelling, and recommendations.", emoji: "🎬" },
+  { topic: "Data Science", name: "DataVerse", description: "Find patterns, explore datasets, and turn data into useful stories.", emoji: "▦" },
+  { topic: "Cybersecurity", name: "CyberShield", description: "Learn about application security, privacy, and defensive security.", emoji: "🛡" },
+  { topic: "IoT", name: "CircuitVerse", description: "Connected devices, microcontrollers, sensors, and embedded projects.", emoji: "⌁" },
+  { topic: "Writing", name: "Wordsmith Collective", description: "A home for essays, stories, ideas, and creative writing.", emoji: "✎" },
+  { topic: "Fitness", name: "Pulse Tribe", description: "Build healthy habits, share activity goals, and learn together.", emoji: "⚡" },
+  { topic: "Astronomy", name: "Orbit Society", description: "Space, astronomy, stargazing, and the questions beyond Earth.", emoji: "☄" }
+];
+
+const TEAM_DEMO_ACCOUNTS = [
+  { name: "Punit", email: "punit@iiitnr.edu.in", bio: "Student exploring AI, web development, and building useful projects · Raipur", interests: ["AI", "Python", "Web Development", "Startups"], city: "Raipur" },
+  { name: "Sahil", email: "sahil@iiitnr.edu.in", bio: "Student interested in problem-solving, software projects, and learning by building · Naya Raipur", interests: ["Python", "Data Science", "Cybersecurity"], city: "Naya Raipur" },
+  { name: "Nilesh", email: "nilesh@iiitnr.edu.in", bio: "Student exploring machine learning, data analysis, and technology research · Naya Raipur", interests: ["AI", "Data Science", "Astronomy"], city: "Naya Raipur" },
+  { name: "Jayesh", email: "jayesh@iiitnr.edu.in", bio: "Student focused on web experiences, creative interfaces, and game ideas · Raipur", interests: ["Web Development", "Design", "Gaming"], city: "Raipur" },
+  { name: "Abhinav", email: "abhinav@iiitnr.edu.in", bio: "Student interested in robotics, connected devices, and secure systems · Naya Raipur", interests: ["Robotics", "IoT", "Cybersecurity"], city: "Naya Raipur" },
+  { name: "Yagyesh", email: "yagyesh@iiitnr.edu.in", bio: "Student curious about startups, finance, and building collaborative ideas · Raipur", interests: ["Finance", "Startups", "Gaming", "Music"], city: "Raipur" }
+];
+
+const PREVIEW_MEMBER_ACCOUNTS = [
+  { name: "Aanya Mehta", email: "preview-01@skillmate.test", bio: "Student developer exploring AI-powered apps and Python projects · Raipur", interests: ["AI", "Python", "Web Development"], city: "Raipur" },
+  { name: "Aarav Sharma", email: "preview-02@skillmate.test", bio: "Student curious about machine learning, data, and useful automation · Naya Raipur", interests: ["AI", "Data Science", "Python"], city: "Naya Raipur" },
+  { name: "Kavya Singh", email: "preview-03@skillmate.test", bio: "Student designer turning rough ideas into clean, usable interfaces · Naya Raipur", interests: ["Design", "Web Development", "Writing"], city: "Naya Raipur" },
+  { name: "Kabir Shah", email: "preview-04@skillmate.test", bio: "Student gamer exploring game development and creative coding · Raipur", interests: ["Gaming", "Web Development", "AI"], city: "Raipur" },
+  { name: "Myra Nair", email: "preview-05@skillmate.test", bio: "Student photographer interested in visual storytelling and film · Bilaspur", interests: ["Photography", "Movies", "Design"], city: "Bilaspur" },
+  { name: "Rohan Iyer", email: "preview-06@skillmate.test", bio: "Student exploring startups, product building, and team collaboration · Naya Raipur", interests: ["Startups", "Web Development", "Finance"], city: "Naya Raipur" },
+  { name: "Sana Khan", email: "preview-07@skillmate.test", bio: "Student interested in psychology, learning habits, and communication · Raipur", interests: ["Psychology", "Writing", "AI"], city: "Raipur" },
+  { name: "Vihaan Das", email: "preview-08@skillmate.test", bio: "Student building electronics experiments and small IoT projects · Naya Raipur", interests: ["IoT", "Robotics", "Python"], city: "Naya Raipur" },
+  { name: "Zoya Kapoor", email: "preview-09@skillmate.test", bio: "Student music lover exploring songwriting and creative tools · Durg", interests: ["Music", "Writing", "Design"], city: "Durg" },
+  { name: "Aditya Verma", email: "preview-10@skillmate.test", bio: "Student curious about entrepreneurship, finance, and fintech · Naya Raipur", interests: ["Finance", "Startups", "Data Science"], city: "Naya Raipur" },
+  { name: "Neel Joshi", email: "preview-11@skillmate.test", bio: "Student exploring cyber safety and secure application design · Raipur", interests: ["Cybersecurity", "Web Development", "Python"], city: "Raipur" },
+  { name: "Priya Desai", email: "preview-12@skillmate.test", bio: "Student writer who enjoys stories, essays, and digital publishing · Naya Raipur", interests: ["Writing", "Movies", "Psychology"], city: "Naya Raipur" },
+  { name: "Farhan Ali", email: "preview-13@skillmate.test", bio: "Student exploring wellness, fitness, and data-driven habits · Durg", interests: ["Fitness", "Data Science", "Psychology"], city: "Durg" },
+  { name: "Tanvi Jain", email: "preview-14@skillmate.test", bio: "Student curious about astronomy, space science, and Python visualisations · Raipur", interests: ["Astronomy", "Python", "AI"], city: "Raipur" },
+  { name: "Mihir Reddy", email: "preview-15@skillmate.test", bio: "Student analytics enthusiast working with datasets and visual stories · Naya Raipur", interests: ["Data Science", "AI", "Finance"], city: "Naya Raipur" },
+  { name: "Diya Bose", email: "preview-16@skillmate.test", bio: "Student UI/UX learner interested in product research and design systems · Bilaspur", interests: ["Design", "Psychology", "Web Development"], city: "Bilaspur" },
+  { name: "Parth Kulkarni", email: "preview-17@skillmate.test", bio: "Student exploring hardware, robotics, and embedded projects · Raipur", interests: ["Robotics", "IoT", "Cybersecurity"], city: "Raipur" },
+  { name: "Avni Mishra", email: "preview-18@skillmate.test", bio: "Student interested in independent music, movies, and creative communities · Naya Raipur", interests: ["Music", "Movies", "Photography"], city: "Naya Raipur" },
+  { name: "Samar Bhat", email: "preview-19@skillmate.test", bio: "Student learning web technologies and building responsive interfaces · Durg", interests: ["Web Development", "Python", "Design"], city: "Durg" },
+  { name: "Rhea Malhotra", email: "preview-20@skillmate.test", bio: "Student startup enthusiast curious about new products and community ideas · Raipur", interests: ["Startups", "Finance", "Writing"], city: "Raipur" },
+  { name: "Yash Sinha", email: "preview-21@skillmate.test", bio: "Student exploring secure software, coding challenges, and open learning · Naya Raipur", interests: ["Cybersecurity", "Python", "Data Science"], city: "Naya Raipur" },
+  { name: "Nisha Menon", email: "preview-22@skillmate.test", bio: "Student interested in finance, investing basics, and analytics · Raipur", interests: ["Finance", "Data Science", "Writing"], city: "Raipur" },
+  { name: "Shaurya Chopra", email: "preview-23@skillmate.test", bio: "Student game-development learner interested in AI and graphics · Naya Raipur", interests: ["Gaming", "AI", "Web Development"], city: "Naya Raipur" },
+  { name: "Arjun Rao", email: "preview-24@skillmate.test", bio: "Student photographer combining design, film, and storytelling · Raipur", interests: ["Photography", "Design", "Movies"], city: "Raipur" },
+  { name: "Meera Pillai", email: "preview-25@skillmate.test", bio: "Student wellness enthusiast exploring psychology and fitness data · Naya Raipur", interests: ["Fitness", "Psychology", "Data Science"], city: "Naya Raipur" }
+];
 
 function requireLogin(req, res, next) {
   if (!req.session.userId) {
@@ -406,9 +503,99 @@ function requireLogin(req, res, next) {
       error: "Please log in first."
     });
   }
-
   next();
 }
+
+function seedDemoData() {
+  const upsertCommunity = db.prepare(`
+    INSERT INTO communities (topic, name, description, emoji)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(topic) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      emoji = excluded.emoji
+  `);
+
+  const findUser = db.prepare("SELECT id FROM users WHERE email = ?");
+
+  const insertUser = db.prepare(`
+    INSERT INTO users (name, email, password_hash, bio, is_demo)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const updateUser = db.prepare(`
+    UPDATE users SET name = ?, bio = ?, is_demo = ?, password_hash = ?
+    WHERE id = ?
+  `);
+
+  const joinCommunity = db.prepare(`
+    INSERT OR IGNORE INTO community_members (community_id, user_id)
+    SELECT id, ? FROM communities WHERE topic = ?
+  `);
+
+  const teamPasswordHash = bcrypt.hashSync("69696969", 10);
+
+  const privatePreviewPasswordHash = bcrypt.hashSync(
+    crypto.randomBytes(32).toString("hex"), 10
+  );
+
+  const seedTransaction = db.transaction(() => {
+    COMMUNITY_CATALOG.forEach(community => {
+      upsertCommunity.run(
+        community.topic,
+        community.name,
+        community.description,
+        community.emoji
+      );
+    });
+
+    const allSeedAccounts = process.env.NODE_ENV === "production"
+      ? []
+      : [
+          ...TEAM_DEMO_ACCOUNTS.map(profile => ({ ...profile, isDemo: 0, passwordHash: teamPasswordHash })),
+          ...PREVIEW_MEMBER_ACCOUNTS.map(profile => ({ ...profile, isDemo: 1, passwordHash: privatePreviewPasswordHash }))
+        ];
+
+    for (const profile of allSeedAccounts) {
+      const email = profile.email.toLowerCase();
+      const bio = `${profile.bio.split(" · ").slice(0, -1).join(" · ")} · ${profile.city}`.slice(0, 500);
+      const existing = findUser.get(email);
+      let userId;
+
+      if (existing) {
+        userId = Number(existing.id);
+        updateUser.run(
+          profile.name,
+          bio,
+          profile.isDemo,
+          profile.passwordHash,
+          userId
+        );
+      } else {
+        const inserted = insertUser.run(
+          profile.name,
+          email,
+          profile.passwordHash,
+          bio,
+          profile.isDemo
+        );
+        userId = Number(inserted.lastInsertRowid);
+      }
+
+      saveInterests(userId, profile.interests);
+
+      if (profile.isDemo) {
+        for (const topic of profile.interests) {
+          joinCommunity.run(userId, topic);
+        }
+      }
+    }
+  });
+
+  seedTransaction();
+}
+
+seedDemoData();
 
 function isConnected(userA, userB) {
   return Boolean(db.prepare(`
@@ -448,12 +635,22 @@ function establishSession(req, res, next, userId, status, message) {
   });
 }
 
-/* ==========================================================
-   FRONTEND
-========================================================== */
+app.get("/", (req, res, next) => {
+  fs.readFile(path.join(ROOT, "index.html"), "utf8", (error, html) => {
+    if (error) return next(error);
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(ROOT, "index.html"));
+    const chatScript = '<script src="/community-chat-client.js"></script>';
+
+    const page = html.includes("/community-chat-client.js")
+      ? html
+      : html.replace(/<\/body>/i, `${chatScript}\n</body>`);
+
+    res.type("html").send(page);
+  });
+});
+
+app.get("/community-chat-client.js", (req, res) => {
+  res.sendFile(path.join(ROOT, "community-chat-client.js"));
 });
 
 app.get("/style.css", (req, res) => {
@@ -466,20 +663,12 @@ app.get("/script.js", (req, res) => {
 
 app.use("/uploads", express.static(uploadDir));
 
-/* ==========================================================
-   HEALTH CHECK
-========================================================== */
-
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     message: "SkillMate backend is running."
   });
 });
-
-/* ==========================================================
-   REGISTER
-========================================================== */
 
 app.post(
   "/api/auth/register",
@@ -553,10 +742,6 @@ app.post(
   }
 );
 
-/* ==========================================================
-   LOGIN
-========================================================== */
-
 app.post(
   "/api/auth/login",
   loginLimiter,
@@ -599,10 +784,6 @@ app.post(
   }
 );
 
-/* ==========================================================
-   LOGOUT / CURRENT USER
-========================================================== */
-
 app.post("/api/auth/logout", (req, res, next) => {
   req.session.destroy(error => {
     if (error) return next(error);
@@ -628,10 +809,6 @@ app.get("/api/auth/me", requireLogin, (req, res) => {
 
   res.json({ user });
 });
-
-/* ==========================================================
-   PROFILE UPDATE
-========================================================== */
 
 app.put("/api/profile", requireLogin, (req, res) => {
   const { name, bio, interests } = req.body;
@@ -669,15 +846,10 @@ app.put("/api/profile", requireLogin, (req, res) => {
   });
 });
 
-/* ==========================================================
-   PROFILE PHOTO UPLOAD
-========================================================== */
-
 const storage = multer.diskStorage({
   destination: (req, file, callback) => {
     callback(null, uploadDir);
   },
-
   filename: (req, file, callback) => {
     const extensions = {
       "image/jpeg": ".jpg",
@@ -704,7 +876,6 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
-
   fileFilter: (req, file, callback) => {
     const allowed = [
       "image/jpeg",
@@ -746,17 +917,11 @@ app.post(
   }
 );
 
-/* ==========================================================
-   SEARCH REGISTERED MEMBERS
-========================================================== */
-
-app.get("/api/profiles", requireLogin, (req, res) => {
+app.get("/api/profiles", (req, res) => {
   const search = String(req.query.search || "").trim().slice(0, 100);
   const interest = String(req.query.interest || "").trim().slice(0, 40);
-  const currentUserId = req.session.userId;
-
-  const escapedSearch = search.replace(/[\\%_]/g, "\\$&");
-  const pattern = `%${escapedSearch}%`;
+  const currentUserId = Number(req.session?.userId || 0);
+  const pattern = `%${search}%`;
 
   let users = db.prepare(`
     SELECT id
@@ -764,29 +929,23 @@ app.get("/api/profiles", requireLogin, (req, res) => {
     WHERE id != ?
       AND (
         ? = ''
-        OR name LIKE ? ESCAPE '\\'
-        OR bio LIKE ? ESCAPE '\\'
+        OR name LIKE ?
+        OR bio LIKE ?
       )
     ORDER BY name COLLATE NOCASE
     LIMIT 100
   `).all(currentUserId, search, pattern, pattern);
 
-  users = users.map(user => getProfile(user.id)).filter(Boolean);
+  users = users.map(user => getPublicProfile(user.id)).filter(Boolean);
 
   if (interest) {
     users = users.filter(user =>
-      user.interests.some(item =>
-        item.toLowerCase() === interest.toLowerCase()
-      )
+      user.interests.some(item => item.toLowerCase() === interest.toLowerCase())
     );
   }
 
   res.json({ profiles: users });
 });
-
-/* ==========================================================
-   CONNECTION REQUESTS
-========================================================== */
 
 app.post("/api/connections/request/:userId", requireLogin, (req, res) => {
   const requesterId = req.session.userId;
@@ -858,7 +1017,7 @@ app.get("/api/connections", requireLogin, (req, res) => {
   res.json({
     connections: connections.map(connection => ({
       ...connection,
-      user: getProfile(connection.other_user_id)
+      user: getPublicProfile(connection.other_user_id)
     }))
   });
 });
@@ -899,10 +1058,6 @@ app.post("/api/connections/:id/reject", requireLogin, (req, res) => {
   res.json({ message: "Connection request declined." });
 });
 
-/* ==========================================================
-   CHAT HISTORY
-========================================================== */
-
 app.get("/api/messages/:userId", requireLogin, (req, res) => {
   const currentUserId = req.session.userId;
   const otherUserId = Number(req.params.userId);
@@ -935,10 +1090,6 @@ app.get("/api/messages/:userId", requireLogin, (req, res) => {
 
   res.json({ messages: messages.reverse() });
 });
-
-/* ==========================================================
-   SEND MESSAGE
-========================================================== */
 
 app.post("/api/messages/:userId", requireLogin, (req, res) => {
   const senderId = req.session.userId;
@@ -995,13 +1146,8 @@ app.post("/api/messages/:userId", requireLogin, (req, res) => {
 
   res.status(201).json({ message });
 });
-
-/* ==========================================================
-   REAL-TIME SOCKET AUTHENTICATION
-========================================================== */
-
 io.on("connection", socket => {
-  const userId = socket.request.session?.userId;
+  const userId = Number(socket.request.session?.userId || 0);
 
   if (!userId) {
     socket.disconnect(true);
@@ -1009,14 +1155,276 @@ io.on("connection", socket => {
   }
 
   socket.join(`user:${userId}`);
+
+  const memberships = db.prepare(`
+    SELECT community_id
+    FROM community_members
+    WHERE user_id = ?
+  `).all(userId);
+
+  memberships.forEach(row => {
+    socket.join(`community:${row.community_id}`);
+  });
+
+  socket.on("community:join", rawCommunityId => {
+    const communityId = Number(rawCommunityId);
+
+    if (!Number.isSafeInteger(communityId) || communityId <= 0) return;
+
+    const membership = db.prepare(`
+      SELECT 1 FROM community_members
+      WHERE community_id = ? AND user_id = ?
+    `).get(communityId, userId);
+
+    if (membership) socket.join(`community:${communityId}`);
+  });
+
+  socket.on("community:leave", rawCommunityId => {
+    const communityId = Number(rawCommunityId);
+
+    if (!Number.isSafeInteger(communityId) || communityId <= 0) return;
+
+    socket.leave(`community:${communityId}`);
+  });
 });
 
-/* ==========================================================
-   ERROR HANDLING
-========================================================== */
+app.get("/api/communities", (req, res) => {
+  const userId = Number(req.session?.userId || 0);
+
+  const communities = db.prepare(`
+    SELECT
+      c.id,
+      c.topic,
+      c.name,
+      c.description,
+      c.emoji,
+      COUNT(DISTINCT cm.user_id) AS member_count,
+      EXISTS(
+        SELECT 1 FROM community_members mine
+        WHERE mine.community_id = c.id AND mine.user_id = ?
+      ) AS is_member
+    FROM communities c
+    LEFT JOIN community_members cm ON cm.community_id = c.id
+    GROUP BY c.id
+    ORDER BY c.topic COLLATE NOCASE
+  `).all(userId).map(community => ({
+    ...community,
+    member_count: Number(community.member_count),
+    is_member: Boolean(community.is_member)
+  }));
+
+  res.json({ communities });
+});
+
+app.post("/api/communities/join-my-interests", requireLogin, (req, res) => {
+  const interests = cleanInterests(req.body.interests);
+
+  if (!interests.length) {
+    return res.status(400).json({
+      error: "Select at least one interest first."
+    });
+  }
+
+  const normalizedTopics = new Set(
+    interests.map(value => value.toLowerCase())
+  );
+
+  const matching = COMMUNITY_CATALOG.filter(community =>
+    normalizedTopics.has(community.topic.toLowerCase())
+  );
+
+  if (!matching.length) {
+    return res.status(400).json({
+      error: "No communities match those interests."
+    });
+  }
+
+  const join = db.prepare(`
+    INSERT OR IGNORE INTO community_members (community_id, user_id)
+    SELECT id, ? FROM communities WHERE topic = ?
+  `);
+
+  const transaction = db.transaction(() => {
+    matching.forEach(community =>
+      join.run(req.session.userId, community.topic)
+    );
+  });
+
+  transaction();
+
+  matching.forEach(community => {
+    const row = db.prepare(
+      "SELECT id FROM communities WHERE topic = ?"
+    ).get(community.topic);
+
+    if (row) {
+      io.in(`user:${req.session.userId}`)
+        .socketsJoin(`community:${row.id}`);
+    }
+  });
+
+  res.json({
+    message: `Joined ${matching.length} ${matching.length === 1 ? "community" : "communities"} matching your selected interests.`,
+    joined: matching.map(community => community.topic)
+  });
+});
+
+app.post("/api/communities/:id/join", requireLogin, (req, res) => {
+  const communityId = Number(req.params.id);
+
+  if (!Number.isInteger(communityId) || communityId <= 0) {
+    return res.status(400).json({ error: "Invalid community." });
+  }
+
+  const community = db.prepare(
+    "SELECT id FROM communities WHERE id = ?"
+  ).get(communityId);
+
+  if (!community) {
+    return res.status(404).json({ error: "Community not found." });
+  }
+
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO community_members (community_id, user_id)
+    VALUES (?, ?)
+  `).run(communityId, req.session.userId);
+
+  io.in(`user:${req.session.userId}`)
+    .socketsJoin(`community:${communityId}`);
+
+  res.status(result.changes ? 201 : 200).json({
+    message: result.changes
+      ? "Joined community."
+      : "You are already a member."
+  });
+});
+
+app.post("/api/communities/:id/leave", requireLogin, (req, res) => {
+  const communityId = Number(req.params.id);
+
+  if (!Number.isInteger(communityId) || communityId <= 0) {
+    return res.status(400).json({ error: "Invalid community." });
+  }
+
+  const result = db.prepare(`
+    DELETE FROM community_members
+    WHERE community_id = ? AND user_id = ?
+  `).run(communityId, req.session.userId);
+
+  io.in(`user:${req.session.userId}`)
+    .socketsLeave(`community:${communityId}`);
+
+  res.json({
+    message: result.changes
+      ? "Left community."
+      : "You were not a member of this community."
+  });
+});
+
+function getCommunityMessage(messageId) {
+  return db.prepare(`
+    SELECT
+      cm.id,
+      cm.community_id,
+      cm.user_id,
+      cm.body,
+      cm.created_at,
+      u.name AS sender_name,
+      u.photo_url AS sender_photo_url
+    FROM community_messages cm
+    JOIN users u ON u.id = cm.user_id
+    WHERE cm.id = ?
+  `).get(messageId);
+}
+
+function isCommunityMember(communityId, userId) {
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM community_members
+    WHERE community_id = ? AND user_id = ?
+  `).get(communityId, userId));
+}
+
+app.get("/api/communities/:id/messages", requireLogin, (req, res) => {
+  const communityId = Number(req.params.id);
+
+  if (!Number.isSafeInteger(communityId) || communityId <= 0) {
+    return res.status(400).json({ error: "Invalid community." });
+  }
+
+  if (!isCommunityMember(communityId, req.session.userId)) {
+    return res.status(403).json({
+      error: "Join this community to view its group chat."
+    });
+  }
+
+  const messages = db.prepare(`
+    SELECT
+      cm.id,
+      cm.community_id,
+      cm.user_id,
+      cm.body,
+      cm.created_at,
+      u.name AS sender_name,
+      u.photo_url AS sender_photo_url
+    FROM community_messages cm
+    JOIN users u ON u.id = cm.user_id
+    WHERE cm.community_id = ?
+    ORDER BY cm.id DESC
+    LIMIT 200
+  `).all(communityId).reverse();
+
+  res.json({ messages });
+});
+
+app.post("/api/communities/:id/messages", requireLogin, (req, res) => {
+  const communityId = Number(req.params.id);
+
+  const body = typeof req.body?.body === "string"
+    ? req.body.body.trim()
+    : "";
+
+  if (!Number.isSafeInteger(communityId) || communityId <= 0) {
+    return res.status(400).json({ error: "Invalid community." });
+  }
+
+  if (!body) {
+    return res.status(400).json({
+      error: "Message cannot be empty."
+    });
+  }
+
+  if (body.length > 2000) {
+    return res.status(400).json({
+      error: "Message must be 2,000 characters or less."
+    });
+  }
+
+  if (!isCommunityMember(communityId, req.session.userId)) {
+    return res.status(403).json({
+      error: "Join this community before sending messages."
+    });
+  }
+
+  const result = db.prepare(`
+    INSERT INTO community_messages (community_id, user_id, body)
+    VALUES (?, ?, ?)
+  `).run(communityId, req.session.userId, body);
+
+  const message = getCommunityMessage(
+    Number(result.lastInsertRowid)
+  );
+
+  io.to(`community:${communityId}`)
+    .emit("community:message:new", message);
+
+  res.status(201).json({ message });
+});
 
 app.use("/api", (req, res) => {
-  res.status(404).json({ error: "API endpoint not found." });
+  res.status(404).json({
+    error: "API endpoint not found."
+  });
 });
 
 app.use((error, req, res, next) => {
@@ -1031,7 +1439,9 @@ app.use((error, req, res, next) => {
   }
 
   if (error.message?.startsWith("Upload a JPG")) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message
+    });
   }
 
   if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -1044,10 +1454,6 @@ app.use((error, req, res, next) => {
     error: "An unexpected server error occurred."
   });
 });
-
-/* ==========================================================
-   START SERVER
-========================================================== */
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log("");
